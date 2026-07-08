@@ -1,0 +1,32 @@
+# Binaries
+/meridian
+/cmd/meridian/meridian
+
+# Test binary, built with `go test -c`
+*.test
+
+# Output of go coverage
+*.out
+
+# Dependency directories
+/vendor/
+
+# IDE
+.idea/
+.vscode/
+*.swp
+*.swo
+*~
+
+# OS
+.DS_Store
+Thumbs.db
+
+# Runtime data
+*.wal
+*.tmp
+/data/
+coverage.html
+coverage.out
+
+

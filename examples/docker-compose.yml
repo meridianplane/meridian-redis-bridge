@@ -1,0 +1,47 @@
+version: "3.8"
+
+services:
+  redis-primary:
+    image: redis:7-alpine
+  redis-follower:
+    image: redis:7-alpine
+
+  meridian-primary:
+    build: ..
+    ports: ["6381:6380", "7070:7070"]
+    volumes:
+      - ./primary.json:/etc/meridian/config.json:ro
+      - primary-data:/var/lib/meridian
+    depends_on: [redis-primary]
+    restart: unless-stopped
+
+  meridian-lb:
+    build: ..
+    ports: ["7072:7070"]
+    volumes:
+      - ./lb.json:/etc/meridian/config.json:ro
+    depends_on: [meridian-primary]
+    restart: unless-stopped
+
+  meridian-relay:
+    build: ..
+    ports: ["7073:7070"]
+    volumes:
+      - ./relay.json:/etc/meridian/config.json:ro
+      - relay-data:/var/lib/meridian
+    depends_on: [meridian-primary]
+    restart: unless-stopped
+
+  meridian-follower:
+    build: ..
+    ports: ["6382:6380", "7071:7070"]
+    volumes:
+      - ./follower.json:/etc/meridian/config.json:ro
+      - follower-data:/var/lib/meridian
+    depends_on: [redis-follower, meridian-relay]
+    restart: unless-stopped
+
+volumes:
+  primary-data:
+  relay-data:
+  follower-data:

@@ -1,0 +1,169 @@
+package main
+
+import (
+	"context"
+	"flag"
+	"fmt"
+	"log/slog"
+	"net"
+	"os"
+	"os/signal"
+	"path/filepath"
+	"syscall"
+
+	"google.golang.org/grpc"
+
+	"github.com/meridianplane/meridian-redis-bridge/internal/auth"
+	"github.com/meridianplane/meridian-redis-bridge/internal/config"
+	"github.com/meridianplane/meridian-redis-bridge/internal/proxy"
+	"github.com/meridianplane/meridian-redis-bridge/internal/server"
+	"github.com/meridianplane/meridian-redis-bridge/internal/sync"
+	"github.com/meridianplane/meridian-redis-bridge/internal/wal"
+	pb "github.com/meridianplane/meridian-redis-bridge/proto"
+)
+
+var version = "dev"
+
+func main() {
+	configPath := flag.String("config", "", "path to config.json")
+	showVersion := flag.Bool("version", false, "print version and exit")
+	flag.Parse()
+
+	if *showVersion {
+		fmt.Println("meridian-redis-bridge", version)
+		return
+	}
+	if *configPath == "" {
+		if flag.NArg() > 0 {
+			*configPath = flag.Arg(0)
+		} else {
+			fmt.Fprintf(os.Stderr, "usage: %s -config <config.json>\n", os.Args[0])
+			os.Exit(2)
+		}
+	}
+
+	cfg, err := config.Load(*configPath)
+	if err != nil {
+		fmt.Fprintf(os.Stderr, "config: %v\n", err)
+		os.Exit(1)
+	}
+	log := slog.New(slog.NewTextHandler(os.Stderr, nil))
+	if err := run(cfg, log); err != nil {
+		log.Error("run failed", "err", err)
+		os.Exit(1)
+	}
+}
+
+func run(cfg *config.Config, log *slog.Logger) error {
+	ctx, stop := signal.NotifyContext(context.Background(), syscall.SIGINT, syscall.SIGTERM)
+	defer stop()
+
+	isPrimary := cfg.IsPrimary()
+	role := "follower"
+	if isPrimary { role = "primary" }
+	if cfg.IsLB() { role = "lb" }
+	log = log.With("role", role)
+	upstream := cfg.UpstreamAddrs()
+
+	// LB mode: pure proxy, no WAL, no backend, no RESP frontend.
+	if cfg.IsLB() {
+		if len(upstream) == 0 {
+			return fmt.Errorf("lb mode requires upstream addresses")
+		}
+		grpcLn, err := net.Listen("tcp", cfg.GRPCListen)
+		if err != nil { return err }
+		gs := grpc.NewServer()
+		syncSrv := sync.NewServer(nil, nil, 0)
+		syncSrv.SetUpstream(upstream)
+		pb.RegisterReplicationServer(gs, syncSrv)
+		go func() { <-ctx.Done(); gs.GracefulStop() }()
+		log.Info("lb started", "grpc", cfg.GRPCListen)
+		return gs.Serve(grpcLn)
+	}
+
+	// Local backend — optional (relay-only nodes skip it).
+	var be *proxy.Backend
+	if cfg.Backend.Addr != "" {
+		be = proxy.NewBackend(proxy.BackendConfig{
+			Addr:     cfg.Backend.Addr,
+			Password: cfg.Backend.Password,
+			DB:       cfg.Backend.DB,
+			PoolSize: cfg.Backend.PoolSize,
+		})
+		defer be.Close()
+		if err := be.Ping(ctx); err != nil {
+			return err
+		}
+	}
+
+	// Write-ahead log.
+	w, err := wal.Open(wal.Options{Dir: cfg.WALDir()})
+	if err != nil {
+		return err
+	}
+
+	// Write forwarder. Nil on the primary.
+	var fwd proxy.Forwarder
+	if !isPrimary && len(upstream) > 0 {
+		fwd = proxy.NewGRPCForwarder(upstream[0])
+		defer fwd.(*proxy.GRPCForwarder).Close()
+	}
+
+	// Dispatcher.
+	d := proxy.NewDispatcher(be, proxy.NewRouter(), w, isPrimary, fwd, cfg.ForwardWritesEnabled(), cfg.Relay)
+	if cfg.AuthEnabled() {
+		a, err := auth.NewFromFile(cfg.Auth.PasswdFile)
+		if err != nil {
+			return fmt.Errorf("auth: %w", err)
+		}
+		d.Auth = a
+	}
+
+	// gRPC replication server.
+	grpcLn, err := net.Listen("tcp", cfg.GRPCListen)
+	if err != nil {
+		return err
+	}
+	gs := grpc.NewServer()
+	syncSrv := sync.NewServer(w, d, 0)
+	syncSrv.SetUpstream(upstream)
+	pb.RegisterReplicationServer(gs, syncSrv)
+	go func() { <-ctx.Done(); gs.GracefulStop() }()
+	go func() {
+		if serveErr := gs.Serve(grpcLn); serveErr != nil {
+			log.Error("gRPC serve stopped", "err", serveErr)
+		}
+	}()
+
+	// RESP front-end.
+	ln, err := net.Listen("tcp", cfg.Listen)
+	if err != nil {
+		return err
+	}
+	srv := server.New(ln, d, log)
+
+	// Follower: subscribe to upstream WAL.
+	if !isPrimary && len(upstream) > 0 {
+		wmPath := filepath.Join(cfg.StateDir(), "watermark")
+		wm, err := sync.OpenWatermark(wmPath)
+		if err != nil {
+			return fmt.Errorf("watermark open %s: %w", wmPath, err)
+		}
+		flw := sync.NewFollower(sync.FollowerConfig{
+			OwnerAddrs:     upstream,
+			FollowerRegion: cfg.GRPCListen,
+			FollowerID:     cfg.GRPCListen,
+			Applier:        d,
+			Watermark:      wm,
+			Logger:         log,
+		})
+		go func() {
+			if err := flw.Run(ctx); err != nil && ctx.Err() == nil {
+				log.Error("follower stream exited", "err", err)
+			}
+		}()
+	}
+
+	log.Info("meridian started", "listen", cfg.Listen, "grpc", cfg.GRPCListen)
+	return srv.Serve(ctx)
+}

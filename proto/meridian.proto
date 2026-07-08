@@ -1,0 +1,44 @@
+syntax = "proto3";
+
+package meridian.v1;
+
+option go_package = "github.com/meridianplane/meridian-redis-bridge/proto;pb";
+
+message WalEntry {
+  uint64 seq_id       = 1;
+  repeated bytes args = 3;
+  int64  timestamp_ms = 4;
+}
+
+message SubscribeRequest {
+  string follower_region = 1;
+  string follower_id     = 2;
+  uint64 from_seq        = 3;
+}
+
+message SyncBatch {
+  repeated WalEntry entries = 1;
+  uint64 up_to_seq          = 2;
+}
+
+message ForwardRequest {
+  repeated bytes args = 1;
+}
+
+message ForwardReply {
+  string value  = 1;
+  bool   is_nil = 2;
+}
+
+message AckRequest {
+  string follower_id = 1;
+  uint64 applied_seq = 2;
+}
+
+message AckReply {}
+
+service Replication {
+  rpc Subscribe(SubscribeRequest) returns (stream SyncBatch);
+  rpc Forward(ForwardRequest) returns (ForwardReply);
+  rpc Ack(AckRequest) returns (AckReply);
+}

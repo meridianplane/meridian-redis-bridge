@@ -1,0 +1,8 @@
+{
+  "upstream": ["meridian-relay:7070"],
+  "forward_writes": true,
+  "listen": ":6380",
+  "grpc_listen": ":7070",
+  "backend": {"addr": "redis-follower:6379"},
+  "data_dir": "/var/lib/meridian"
+}

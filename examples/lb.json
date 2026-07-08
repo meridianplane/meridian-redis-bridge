@@ -1,0 +1,4 @@
+{
+  "upstream": ["meridian-primary:7070"],
+  "grpc_listen": ":7070"
+}
