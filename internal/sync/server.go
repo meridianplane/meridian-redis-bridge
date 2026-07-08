@@ -11,6 +11,7 @@ import (
 	"google.golang.org/grpc"
 	"google.golang.org/grpc/credentials/insecure"
 
+	"github.com/meridianplane/meridian-redis-bridge/internal/metrics"
 	"github.com/meridianplane/meridian-redis-bridge/internal/wal"
 	pb "github.com/meridianplane/meridian-redis-bridge/proto"
 )
@@ -62,6 +63,9 @@ func (s *Server) Ack(_ context.Context, req *pb.AckRequest) (*pb.AckReply, error
 }
 
 func (s *Server) Subscribe(req *pb.SubscribeRequest, stream pb.Replication_SubscribeServer) error {
+	metrics.ConnectedFollowers.Add(1)
+	defer metrics.ConnectedFollowers.Add(-1)
+
 	from := req.GetFromSeq()
 	ctx := stream.Context()
 

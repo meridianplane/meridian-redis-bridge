@@ -50,6 +50,7 @@ redis-cli -p 6382 GET hello   # → "world"
 | `forward_writes` | follower 是否转发写。默认 `true` |
 | `backend` | 本地 Redis/Kvrocks 地址（LB/relay 可省略） |
 | `data_dir` | WAL 和 watermark 存储目录（LB 可省略） |
+| `metrics_listen` | HTTP metrics 地址（`:8080`），暴露 healthz/readyz/pprof/expvar |
 | `auth` | 客户端认证，`passwd_file` 为 htpasswd 格式 |
 
 ### 节点角色速查

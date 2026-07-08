@@ -22,8 +22,9 @@ type Config struct {
 	Relay bool `json:"relay,omitempty"`
 
 	Listen       string       `json:"listen"`
-	GRPCListen   string       `json:"grpc_listen"`
-	ForwardWrites *bool       `json:"forward_writes,omitempty"`
+	GRPCListen    string  `json:"grpc_listen"`
+	MetricsListen string  `json:"metrics_listen,omitempty"`
+	ForwardWrites *bool   `json:"forward_writes,omitempty"`
 	Auth         AuthConfig   `json:"auth,omitempty"`
 	Backend BackendConfig `json:"backend"`
 	DataDir string        `json:"data_dir"`

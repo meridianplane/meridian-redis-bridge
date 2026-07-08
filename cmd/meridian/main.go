@@ -9,12 +9,14 @@ import (
 	"os"
 	"os/signal"
 	"path/filepath"
+	"time"
 	"syscall"
 
 	"google.golang.org/grpc"
 
 	"github.com/meridianplane/meridian-redis-bridge/internal/auth"
 	"github.com/meridianplane/meridian-redis-bridge/internal/config"
+	"github.com/meridianplane/meridian-redis-bridge/internal/metrics"
 	"github.com/meridianplane/meridian-redis-bridge/internal/proxy"
 	"github.com/meridianplane/meridian-redis-bridge/internal/server"
 	"github.com/meridianplane/meridian-redis-bridge/internal/sync"
@@ -65,6 +67,15 @@ func run(cfg *config.Config, log *slog.Logger) error {
 	log = log.With("role", role)
 	upstream := cfg.UpstreamAddrs()
 
+	// Metrics / health HTTP server.
+	if cfg.MetricsListen != "" {
+		go func() {
+			if err := metrics.Serve(cfg.MetricsListen); err != nil {
+				log.Error("metrics server stopped", "err", err)
+			}
+		}()
+	}
+
 	// LB mode: pure proxy, no WAL, no backend, no RESP frontend.
 	if cfg.IsLB() {
 		if len(upstream) == 0 {
@@ -94,6 +105,7 @@ func run(cfg *config.Config, log *slog.Logger) error {
 		if err := be.Ping(ctx); err != nil {
 			return err
 		}
+		metrics.BackendHealthy.Store(1)
 	}
 
 	// Write-ahead log.
@@ -118,6 +130,21 @@ func run(cfg *config.Config, log *slog.Logger) error {
 		}
 		d.Auth = a
 	}
+
+	// Periodic WAL metrics.
+	go func() {
+		t := time.NewTicker(15 * time.Second)
+		defer t.Stop()
+		for {
+			select {
+			case <-ctx.Done():
+				return
+			case <-t.C:
+				metrics.WALSegments.Store(int64(w.SegmentCount()))
+				metrics.WALSeq.Store(int64(w.NextSeq()))
+			}
+		}
+	}()
 
 	// gRPC replication server.
 	grpcLn, err := net.Listen("tcp", cfg.GRPCListen)
