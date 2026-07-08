@@ -116,7 +116,11 @@ func run(cfg *config.Config, log *slog.Logger) error {
 	}
 
 	// Write-ahead log.
-	w, err := wal.Open(wal.Options{Dir: cfg.WALDir()})
+	w, err := wal.Open(wal.Options{
+		Dir:           cfg.WALDir(),
+		Flush:         walFlushMode(cfg.WALFlush),
+		FlushInterval: cfg.WALFlushInterval,
+	})
 	if err != nil {
 		return err
 	}
@@ -198,4 +202,14 @@ func run(cfg *config.Config, log *slog.Logger) error {
 
 	log.Info("meridian started", "listen", cfg.Listen, "grpc", cfg.GRPCListen)
 	return srv.Serve(ctx)
+}
+func walFlushMode(s string) wal.FlushMode {
+	switch s {
+	case "sync":
+		return wal.FlushSync
+	case "periodic":
+		return wal.FlushPeriodic
+	default:
+		return wal.FlushNone
+	}
 }

@@ -15,6 +15,7 @@ import (
 	"strconv"
 	"strings"
 	"sync"
+	"time"
 
 	pb "github.com/meridianplane/meridian-redis-bridge/proto"
 	"google.golang.org/protobuf/proto"
@@ -26,10 +27,20 @@ const (
 	defaultSegmentMax = int64(64 << 20) // 64 MiB sealed roll-over
 )
 
+type FlushMode int
+
+const (
+	FlushNone     FlushMode = iota // let OS drain buffers
+	FlushPeriodic                  // fsync every interval
+	FlushSync                      // fsync after each write
+)
+
 // Options configures the WAL.
 type Options struct {
 	Dir            string
-	SegmentMaxSize int64 // 0 -> default
+	SegmentMaxSize int64      // 0 -> default
+	Flush          FlushMode  // 0 -> none
+	FlushInterval  int        // ms, for periodic mode (0 -> 100ms)
 }
 
 // WAL is the append-only segmented log with snapshot + delta separation.
@@ -43,6 +54,9 @@ type WAL struct {
 	snapshotSeq uint64        // barrier: WAL >= this seq is pinned during snapshot
 	segments   []*segment    // WAL segments
 	active     *segment      // current writing segment
+	flushMode  FlushMode
+	flushEvery int64 // ms
+	flushStop  chan struct{}
 
 	nextSeq     uint64
 	notifyChans []chan struct{}
@@ -70,9 +84,16 @@ func Open(opts Options) (*WAL, error) {
 	if opts.SegmentMaxSize == 0 {
 		opts.SegmentMaxSize = defaultSegmentMax
 	}
-	w := &WAL{dir: opts.Dir, segmentMax: opts.SegmentMaxSize}
+	if opts.FlushInterval <= 0 {
+		opts.FlushInterval = 100
+	}
+	w := &WAL{dir: opts.Dir, segmentMax: opts.SegmentMaxSize,
+		flushMode: opts.Flush, flushEvery: int64(opts.FlushInterval)}
 	if err := w.loadSegments(); err != nil {
 		return nil, err
+	}
+	if w.flushMode == FlushPeriodic {
+		w.startFlusher()
 	}
 	return w, nil
 }
@@ -192,11 +213,35 @@ func (w *WAL) Append(e *pb.WalEntry) (uint64, error) {
 			return 0, err
 		}
 	}
+	if w.flushMode == FlushSync {
+		if err := w.active.file.Sync(); err != nil {
+			return 0, err
+		}
+	}
 	w.notifyAllLocked()
 	return e.SeqId, nil
 }
 
-// NextSeq returns the seq the next Append will assign.
+func (w *WAL) startFlusher() {
+	w.flushStop = make(chan struct{})
+	go func() {
+		t := time.NewTicker(time.Duration(w.flushEvery) * time.Millisecond)
+		defer t.Stop()
+		for {
+			select {
+			case <-w.flushStop:
+				return
+			case <-t.C:
+				w.mu.Lock()
+				if w.active != nil && w.active.file != nil {
+					_ = w.active.file.Sync()
+				}
+				w.mu.Unlock()
+			}
+		}
+	}()
+
+}// NextSeq returns the seq the next Append will assign.
 func (w *WAL) NextSeq() uint64 {
 	w.mu.Lock()
 	defer w.mu.Unlock()
@@ -322,6 +367,9 @@ func (w *WAL) MinSeq() uint64 {
 }
 
 func (w *WAL) Close() error {
+	if w.flushStop != nil {
+		close(w.flushStop)
+	}
 	w.mu.Lock()
 	defer w.mu.Unlock()
 	if w.active != nil && w.active.file != nil {

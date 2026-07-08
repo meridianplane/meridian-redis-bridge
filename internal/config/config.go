@@ -28,8 +28,10 @@ type Config struct {
 
 	Listen       string       `json:"listen"`
 	GRPCListen    string  `json:"grpc_listen"`
-	MetricsListen string  `json:"metrics_listen,omitempty"`
-	ForwardWrites *bool   `json:"forward_writes,omitempty"`
+	MetricsListen    string `json:"metrics_listen,omitempty"`
+	ForwardWrites    *bool  `json:"forward_writes,omitempty"`
+	WALFlush         string `json:"wal_flush,omitempty"`
+	WALFlushInterval int    `json:"wal_flush_interval,omitempty"`
 	Auth         AuthConfig   `json:"auth,omitempty"`
 	Backend BackendConfig `json:"backend"`
 	DataDir string        `json:"data_dir"`

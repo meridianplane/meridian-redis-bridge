@@ -127,6 +127,16 @@ go build ./cmd/meridian
 
 要求 Go ≥ 1.24。
 
+### WAL 刷盘性能（Apple M3）
+
+| 模式 | 单线程 | 8 并发 | 延迟 |
+|------|--------|--------|------|
+| `none` | 282k ops/s | 208k ops/s | 4.7µs |
+| `periodic` | 50k ops/s | 25k ops/s | 33µs |
+| `sync` | 556 ops/s | 438 ops/s | 2.9ms |
+
+配置：`"wal_flush": "periodic", "wal_flush_interval": 100`（periodic 毫秒间隔）
+
 ### Docker
 
 ```bash
