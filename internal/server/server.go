@@ -16,7 +16,9 @@ import (
 	"net"
 	"sync"
 
+	
 	"github.com/meridianplane/meridian-redis-bridge/internal/proxy"
+	"github.com/meridianplane/meridian-redis-bridge/internal/metrics"
 	"github.com/meridianplane/meridian-redis-bridge/internal/resp"
 )
 
@@ -29,6 +31,7 @@ type Logger interface {
 
 // Server accepts RESP connections and dispatches their commands.
 type Server struct {
+	Metrics *metrics.Metrics
 	ln  net.Listener
 	d   *proxy.Dispatcher
 	log Logger
@@ -71,6 +74,8 @@ func (s *Server) Serve(ctx context.Context) error {
 
 // handle serves one client connection until it closes or errors.
 func (s *Server) handle(ctx context.Context, conn net.Conn) {
+	if s.Metrics != nil { s.Metrics.RecordRespOpen() }
+	defer func() { if s.Metrics != nil { s.Metrics.RecordRespClose() } }()
 	defer conn.Close()
 	// Stop a blocked read when the server is shutting down.
 	go func() {

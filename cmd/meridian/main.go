@@ -6,6 +6,7 @@ import (
 	"fmt"
 	"log/slog"
 	"net"
+	"net/http"
 	"os"
 	"os/signal"
 	"path/filepath"
@@ -60,17 +61,21 @@ func run(cfg *config.Config, log *slog.Logger) error {
 	ctx, stop := signal.NotifyContext(context.Background(), syscall.SIGINT, syscall.SIGTERM)
 	defer stop()
 
+	m := metrics.New(cfg.Cluster, cfg.Name)
+
 	isPrimary := cfg.IsPrimary()
 	role := "follower"
 	if isPrimary { role = "primary" }
 	if cfg.IsLB() { role = "lb" }
+	if cfg.Relay { role = "relay" }
 	log = log.With("role", role)
+	m.Info.WithLabelValues(cfg.Cluster, cfg.Name, role).Set(1)
 	upstream := cfg.UpstreamAddrs()
 
 	// Metrics / health HTTP server.
 	if cfg.MetricsListen != "" {
 		go func() {
-			if err := metrics.Serve(cfg.MetricsListen); err != nil {
+			if err := http.ListenAndServe(cfg.MetricsListen, metrics.HTTPHandler()); err != nil {
 				log.Error("metrics server stopped", "err", err)
 			}
 		}()
@@ -84,7 +89,7 @@ func run(cfg *config.Config, log *slog.Logger) error {
 		grpcLn, err := net.Listen("tcp", cfg.GRPCListen)
 		if err != nil { return err }
 		gs := grpc.NewServer()
-		syncSrv := sync.NewServer(nil, nil, 0)
+		syncSrv := sync.NewServer(nil, nil, 0, m)
 		syncSrv.SetUpstream(upstream)
 		pb.RegisterReplicationServer(gs, syncSrv)
 		go func() { <-ctx.Done(); gs.GracefulStop() }()
@@ -105,7 +110,7 @@ func run(cfg *config.Config, log *slog.Logger) error {
 		if err := be.Ping(ctx); err != nil {
 			return err
 		}
-		metrics.BackendHealthy.Store(1)
+		m.BackendHealthy.Set(1)
 	}
 
 	// Write-ahead log.
@@ -117,12 +122,13 @@ func run(cfg *config.Config, log *slog.Logger) error {
 	// Write forwarder. Nil on the primary.
 	var fwd proxy.Forwarder
 	if !isPrimary && len(upstream) > 0 {
-		fwd = proxy.NewGRPCForwarder(upstream[0])
+		fwd = proxy.NewGRPCForwarder(upstream[0], m)
 		defer fwd.(*proxy.GRPCForwarder).Close()
 	}
 
 	// Dispatcher.
 	d := proxy.NewDispatcher(be, proxy.NewRouter(), w, isPrimary, fwd, cfg.ForwardWritesEnabled(), cfg.Relay)
+	d.Metrics = m
 	if cfg.AuthEnabled() {
 		a, err := auth.NewFromFile(cfg.Auth.PasswdFile)
 		if err != nil {
@@ -140,19 +146,17 @@ func run(cfg *config.Config, log *slog.Logger) error {
 			case <-ctx.Done():
 				return
 			case <-t.C:
-				metrics.WALSegments.Store(int64(w.SegmentCount()))
-				metrics.WALSeq.Store(int64(w.NextSeq()))
+				m.WALSegmentCount.Set(float64(w.SegmentCount()))
+				m.WALCurrentSeq.Set(float64(w.NextSeq()))
 			}
 		}
 	}()
 
 	// gRPC replication server.
 	grpcLn, err := net.Listen("tcp", cfg.GRPCListen)
-	if err != nil {
-		return err
-	}
+	if err != nil { return err }
 	gs := grpc.NewServer()
-	syncSrv := sync.NewServer(w, d, 0)
+	syncSrv := sync.NewServer(w, d, 0, m)
 	syncSrv.SetUpstream(upstream)
 	pb.RegisterReplicationServer(gs, syncSrv)
 	go func() { <-ctx.Done(); gs.GracefulStop() }()
@@ -164,10 +168,9 @@ func run(cfg *config.Config, log *slog.Logger) error {
 
 	// RESP front-end.
 	ln, err := net.Listen("tcp", cfg.Listen)
-	if err != nil {
-		return err
-	}
+	if err != nil { return err }
 	srv := server.New(ln, d, log)
+	srv.Metrics = m
 
 	// Follower: subscribe to upstream WAL.
 	if !isPrimary && len(upstream) > 0 {

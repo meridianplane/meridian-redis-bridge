@@ -1,0 +1,610 @@
+{
+  "title": "Meridian Redis Bridge",
+  "uid": "meridian-redis-bridge",
+  "templating": {
+    "list": [
+      {
+        "name": "cluster",
+        "type": "query",
+        "query": "meridian_info",
+        "regex": "/cluster=\"([^\"]+)\"/",
+        "label": "Cluster",
+        "multi": false,
+        "includeAll": false
+      },
+      {
+        "name": "node",
+        "type": "query",
+        "query": "meridian_info{cluster=\"$cluster\"}",
+        "regex": "/name=\"([^\"]+)\"/",
+        "label": "Node",
+        "multi": true,
+        "includeAll": true
+      }
+    ]
+  },
+  "panels": [
+    {
+      "title": "Instance Info",
+      "type": "table",
+      "gridPos": {
+        "x": 0,
+        "y": 0,
+        "w": 24,
+        "h": 2
+      },
+      "targets": [
+        {
+          "expr": "meridian_info{name=~\"$instance\"}",
+          "format": "table"
+        }
+      ],
+      "transformations": [
+        {
+          "id": "organize",
+          "options": {
+            "excludeByName": {
+              "Time": true,
+              "Value": true
+            }
+          }
+        }
+      ]
+    },
+    {
+      "title": "RESP Connections",
+      "type": "timeseries",
+      "gridPos": {
+        "x": 0,
+        "y": 2,
+        "w": 8,
+        "h": 4
+      },
+      "targets": [
+        {
+          "expr": "meridian_resp_connections{instance=~\"$instance_regex\"}",
+          "legendFormat": "active"
+        },
+        {
+          "expr": "rate(meridian_resp_connections_total{instance=~\"$instance_regex\"}[$__rate_interval])",
+          "legendFormat": "new/s"
+        }
+      ]
+    },
+    {
+      "title": "Commands / sec by route",
+      "type": "timeseries",
+      "gridPos": {
+        "x": 8,
+        "y": 2,
+        "w": 8,
+        "h": 4
+      },
+      "targets": [
+        {
+          "expr": "rate(meridian_resp_dispatches_total{instance=~\"$instance_regex\"}[$__rate_interval])",
+          "legendFormat": "{{route}}"
+        }
+      ]
+    },
+    {
+      "title": "Dispatch Latency p50/p99",
+      "type": "timeseries",
+      "gridPos": {
+        "x": 16,
+        "y": 2,
+        "w": 8,
+        "h": 4
+      },
+      "targets": [
+        {
+          "expr": "histogram_quantile(0.50, rate(meridian_resp_dispatch_seconds_bucket{instance=~\"$instance_regex\"}[$__rate_interval]))",
+          "legendFormat": "p50 {{route}}"
+        },
+        {
+          "expr": "histogram_quantile(0.99, rate(meridian_resp_dispatch_seconds_bucket{instance=~\"$instance_regex\"}[$__rate_interval]))",
+          "legendFormat": "p99 {{route}}"
+        }
+      ],
+      "fieldConfig": {
+        "defaults": {
+          "unit": "s"
+        }
+      }
+    },
+    {
+      "title": "WAL",
+      "type": "row",
+      "gridPos": {
+        "x": 0,
+        "y": 6,
+        "w": 24,
+        "h": 1
+      }
+    },
+    {
+      "title": "WAL Segments & Seq",
+      "type": "timeseries",
+      "gridPos": {
+        "x": 0,
+        "y": 7,
+        "w": 8,
+        "h": 4
+      },
+      "targets": [
+        {
+          "expr": "meridian_wal_segment_count{instance=~\"$instance_regex\"}",
+          "legendFormat": "segments"
+        },
+        {
+          "expr": "meridian_wal_current_seq{instance=~\"$instance_regex\"}",
+          "legendFormat": "current seq"
+        }
+      ]
+    },
+    {
+      "title": "WAL Append Rate",
+      "type": "timeseries",
+      "gridPos": {
+        "x": 8,
+        "y": 7,
+        "w": 8,
+        "h": 4
+      },
+      "targets": [
+        {
+          "expr": "rate(meridian_wal_append_total{instance=~\"$instance_regex\"}[$__rate_interval])",
+          "legendFormat": "appends/s"
+        }
+      ]
+    },
+    {
+      "title": "WAL Append Latency",
+      "type": "timeseries",
+      "gridPos": {
+        "x": 16,
+        "y": 7,
+        "w": 8,
+        "h": 4
+      },
+      "targets": [
+        {
+          "expr": "histogram_quantile(0.50, rate(meridian_wal_append_seconds_bucket{instance=~\"$instance_regex\"}[$__rate_interval]))",
+          "legendFormat": "p50"
+        },
+        {
+          "expr": "histogram_quantile(0.99, rate(meridian_wal_append_seconds_bucket{instance=~\"$instance_regex\"}[$__rate_interval]))",
+          "legendFormat": "p99"
+        }
+      ],
+      "fieldConfig": {
+        "defaults": {
+          "unit": "s"
+        }
+      }
+    },
+    {
+      "title": "Replication",
+      "type": "row",
+      "gridPos": {
+        "x": 0,
+        "y": 11,
+        "w": 24,
+        "h": 1
+      }
+    },
+    {
+      "title": "Subscribers",
+      "type": "timeseries",
+      "gridPos": {
+        "x": 0,
+        "y": 12,
+        "w": 6,
+        "h": 4
+      },
+      "targets": [
+        {
+          "expr": "meridian_replication_subscribers{instance=~\"$instance_regex\"}"
+        }
+      ]
+    },
+    {
+      "title": "Replication Lag",
+      "type": "timeseries",
+      "gridPos": {
+        "x": 6,
+        "y": 12,
+        "w": 6,
+        "h": 4
+      },
+      "targets": [
+        {
+          "expr": "meridian_replication_lag_highest{instance=~\"$instance_regex\"}"
+        }
+      ]
+    },
+    {
+      "title": "Stream Rate",
+      "type": "timeseries",
+      "gridPos": {
+        "x": 12,
+        "y": 12,
+        "w": 6,
+        "h": 4
+      },
+      "targets": [
+        {
+          "expr": "rate(meridian_replication_stream_entries_total{instance=~\"$instance_regex\"}[$__rate_interval])",
+          "legendFormat": "entries/s"
+        }
+      ]
+    },
+    {
+      "title": "Forwards & Acks",
+      "type": "timeseries",
+      "gridPos": {
+        "x": 18,
+        "y": 12,
+        "w": 6,
+        "h": 4
+      },
+      "targets": [
+        {
+          "expr": "rate(meridian_replication_forwards_total{instance=~\"$instance_regex\"}[$__rate_interval])",
+          "legendFormat": "forwards/s"
+        },
+        {
+          "expr": "rate(meridian_replication_acks_total{instance=~\"$instance_regex\"}[$__rate_interval])",
+          "legendFormat": "acks/s"
+        }
+      ]
+    },
+    {
+      "title": "Full Sync",
+      "type": "row",
+      "gridPos": {
+        "x": 0,
+        "y": 16,
+        "w": 24,
+        "h": 1
+      }
+    },
+    {
+      "title": "In Progress",
+      "type": "stat",
+      "gridPos": {
+        "x": 0,
+        "y": 17,
+        "w": 6,
+        "h": 3
+      },
+      "targets": [
+        {
+          "expr": "meridian_full_sync_in_progress{instance=~\"$instance_regex\"}"
+        }
+      ]
+    },
+    {
+      "title": "Completed",
+      "type": "stat",
+      "gridPos": {
+        "x": 6,
+        "y": 17,
+        "w": 6,
+        "h": 3
+      },
+      "targets": [
+        {
+          "expr": "meridian_full_sync_total{instance=~\"$instance_regex\"}"
+        }
+      ]
+    },
+    {
+      "title": "Duration p50/p99",
+      "type": "timeseries",
+      "gridPos": {
+        "x": 12,
+        "y": 17,
+        "w": 12,
+        "h": 3
+      },
+      "targets": [
+        {
+          "expr": "histogram_quantile(0.50, rate(meridian_full_sync_duration_seconds_bucket{instance=~\"$instance_regex\"}[$__rate_interval]))",
+          "legendFormat": "p50"
+        },
+        {
+          "expr": "histogram_quantile(0.99, rate(meridian_full_sync_duration_seconds_bucket{instance=~\"$instance_regex\"}[$__rate_interval]))",
+          "legendFormat": "p99"
+        }
+      ],
+      "fieldConfig": {
+        "defaults": {
+          "unit": "s"
+        }
+      }
+    },
+    {
+      "title": "Follower",
+      "type": "row",
+      "gridPos": {
+        "x": 0,
+        "y": 20,
+        "w": 24,
+        "h": 1
+      }
+    },
+    {
+      "title": "Lag",
+      "type": "timeseries",
+      "gridPos": {
+        "x": 0,
+        "y": 21,
+        "w": 6,
+        "h": 4
+      },
+      "targets": [
+        {
+          "expr": "meridian_follower_lag{instance=~\"$instance_regex\"}"
+        }
+      ]
+    },
+    {
+      "title": "Applied Rate",
+      "type": "timeseries",
+      "gridPos": {
+        "x": 6,
+        "y": 21,
+        "w": 6,
+        "h": 4
+      },
+      "targets": [
+        {
+          "expr": "rate(meridian_follower_entries_applied_total{instance=~\"$instance_regex\"}[$__rate_interval])",
+          "legendFormat": "entries/s"
+        }
+      ]
+    },
+    {
+      "title": "Reconnects",
+      "type": "timeseries",
+      "gridPos": {
+        "x": 12,
+        "y": 21,
+        "w": 6,
+        "h": 4
+      },
+      "targets": [
+        {
+          "expr": "rate(meridian_follower_reconnects_total{instance=~\"$instance_regex\"}[$__rate_interval])"
+        }
+      ]
+    },
+    {
+      "title": "Last Ack",
+      "type": "timeseries",
+      "gridPos": {
+        "x": 18,
+        "y": 21,
+        "w": 6,
+        "h": 4
+      },
+      "targets": [
+        {
+          "expr": "time() - meridian_follower_last_ack_timestamp_seconds{instance=~\"$instance_regex\"}",
+          "legendFormat": "{{follower_id}}"
+        }
+      ],
+      "fieldConfig": {
+        "defaults": {
+          "unit": "s"
+        }
+      }
+    },
+    {
+      "title": "Backend",
+      "type": "row",
+      "gridPos": {
+        "x": 0,
+        "y": 25,
+        "w": 24,
+        "h": 1
+      }
+    },
+    {
+      "title": "Requests / Errors",
+      "type": "timeseries",
+      "gridPos": {
+        "x": 0,
+        "y": 26,
+        "w": 6,
+        "h": 4
+      },
+      "targets": [
+        {
+          "expr": "rate(meridian_backend_requests_total{instance=~\"$instance_regex\"}[$__rate_interval])",
+          "legendFormat": "req/s"
+        },
+        {
+          "expr": "rate(meridian_backend_errors_total{instance=~\"$instance_regex\"}[$__rate_interval])",
+          "legendFormat": "err/s"
+        }
+      ]
+    },
+    {
+      "title": "Backend p50/p99",
+      "type": "timeseries",
+      "gridPos": {
+        "x": 6,
+        "y": 26,
+        "w": 6,
+        "h": 4
+      },
+      "targets": [
+        {
+          "expr": "histogram_quantile(0.50, rate(meridian_backend_seconds_bucket{instance=~\"$instance_regex\"}[$__rate_interval]))",
+          "legendFormat": "p50"
+        },
+        {
+          "expr": "histogram_quantile(0.99, rate(meridian_backend_seconds_bucket{instance=~\"$instance_regex\"}[$__rate_interval]))",
+          "legendFormat": "p99"
+        }
+      ],
+      "fieldConfig": {
+        "defaults": {
+          "unit": "s"
+        }
+      }
+    },
+    {
+      "title": "Healthy",
+      "type": "stat",
+      "gridPos": {
+        "x": 12,
+        "y": 26,
+        "w": 6,
+        "h": 4
+      },
+      "targets": [
+        {
+          "expr": "meridian_backend_healthy{instance=~\"$instance_regex\"}"
+        }
+      ],
+      "fieldConfig": {
+        "thresholds": {
+          "mode": "absolute",
+          "steps": [
+            {
+              "color": "red",
+              "value": 0
+            },
+            {
+              "color": "green",
+              "value": 1
+            }
+          ]
+        }
+      }
+    },
+    {
+      "title": "Forward p50/p99",
+      "type": "timeseries",
+      "gridPos": {
+        "x": 18,
+        "y": 26,
+        "w": 6,
+        "h": 4
+      },
+      "targets": [
+        {
+          "expr": "histogram_quantile(0.50, rate(meridian_forward_seconds_bucket{instance=~\"$instance_regex\"}[$__rate_interval]))",
+          "legendFormat": "p50"
+        },
+        {
+          "expr": "histogram_quantile(0.99, rate(meridian_forward_seconds_bucket{instance=~\"$instance_regex\"}[$__rate_interval]))",
+          "legendFormat": "p99"
+        }
+      ],
+      "fieldConfig": {
+        "defaults": {
+          "unit": "s"
+        }
+      }
+    },
+    {
+      "title": "Runtime",
+      "type": "row",
+      "gridPos": {
+        "x": 0,
+        "y": 30,
+        "w": 24,
+        "h": 1
+      }
+    },
+    {
+      "title": "Goroutines",
+      "type": "timeseries",
+      "gridPos": {
+        "x": 0,
+        "y": 31,
+        "w": 6,
+        "h": 4
+      },
+      "targets": [
+        {
+          "expr": "go_goroutines{instance=~\"$instance_regex\"}"
+        }
+      ]
+    },
+    {
+      "title": "Memory",
+      "type": "timeseries",
+      "gridPos": {
+        "x": 6,
+        "y": 31,
+        "w": 6,
+        "h": 4
+      },
+      "targets": [
+        {
+          "expr": "go_memstats_alloc_bytes{instance=~\"$instance_regex\"}",
+          "legendFormat": "alloc"
+        },
+        {
+          "expr": "go_memstats_heap_inuse_bytes{instance=~\"$instance_regex\"}",
+          "legendFormat": "heap"
+        }
+      ],
+      "fieldConfig": {
+        "defaults": {
+          "unit": "bytes"
+        }
+      }
+    },
+    {
+      "title": "GC Pause",
+      "type": "timeseries",
+      "gridPos": {
+        "x": 12,
+        "y": 31,
+        "w": 6,
+        "h": 4
+      },
+      "targets": [
+        {
+          "expr": "rate(go_gc_duration_seconds_sum{instance=~\"$instance_regex\"}[$__rate_interval])"
+        }
+      ],
+      "fieldConfig": {
+        "defaults": {
+          "unit": "s"
+        }
+      }
+    },
+    {
+      "title": "Open FDs",
+      "type": "timeseries",
+      "gridPos": {
+        "x": 18,
+        "y": 31,
+        "w": 6,
+        "h": 4
+      },
+      "targets": [
+        {
+          "expr": "process_open_fds{instance=~\"$instance_regex\"}"
+        }
+      ]
+    }
+  ],
+  "refresh": "10s",
+  "tags": [
+    "meridian",
+    "redis",
+    "replication"
+  ],
+  "time": {
+    "from": "now-1h",
+    "to": "now"
+  }
+}

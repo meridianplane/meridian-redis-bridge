@@ -21,10 +21,46 @@ import (
 	"time"
 
 	"github.com/meridianplane/meridian-redis-bridge/internal/auth"
+	"github.com/meridianplane/meridian-redis-bridge/internal/metrics"
 	"github.com/meridianplane/meridian-redis-bridge/internal/resp"
+	"github.com/redis/go-redis/v9"
 	"github.com/meridianplane/meridian-redis-bridge/internal/wal"
 	pb "github.com/meridianplane/meridian-redis-bridge/proto"
 )
+
+// ── Backend ──
+
+type BackendConfig struct {
+	Addrs      []string
+	Addr       string
+	MasterName string
+	Password   string
+	DB         int
+	PoolSize   int
+}
+
+type Backend struct {
+	cli redis.UniversalClient
+}
+
+func NewBackend(c BackendConfig) *Backend {
+	if c.PoolSize == 0 { c.PoolSize = 32 }
+	addrs := c.Addrs
+	if len(addrs) == 0 && c.Addr != "" { addrs = []string{c.Addr} }
+	cli := redis.NewUniversalClient(&redis.UniversalOptions{
+		Addrs: addrs, MasterName: c.MasterName, Password: c.Password, DB: c.DB, PoolSize: c.PoolSize,
+	})
+	return &Backend{cli: cli}
+}
+
+func (b *Backend) Close() error                  { return b.cli.Close() }
+func (b *Backend) Ping(ctx context.Context) error { return b.cli.Ping(ctx).Err() }
+func (b *Backend) Do(ctx context.Context, args ...any) (any, error) {
+	return b.cli.Do(ctx, args...).Result()
+}
+func IsNil(err error) bool { return errors.Is(err, redis.Nil) }
+
+// ── Forwarder ──
 
 // Forwarder relays a write to an upstream node and returns its reply verbatim.
 type Forwarder interface {
@@ -43,6 +79,7 @@ type Dispatcher struct {
 	ForwardWrites bool
 	Relay         bool // when true, Apply writes entries to local WAL for downstream followers
 	Auth          auth.Authenticator
+	Metrics       *metrics.Metrics
 
 	writeMu sync.Mutex // serialises WAL append + backend execute
 }
@@ -94,20 +131,26 @@ func (d *Dispatcher) Dispatch(ctx context.Context, c *resp.Command, w *resp.Writ
 		return d.handleSelect(c, w)
 	}
 
-	switch d.Router.Decide(c.Name()) {
+	route := d.Router.Decide(c.Name())
+	switch route {
 	case RouteDeny:
+		d.Metrics.RecordDispatch("deny", 0)
 		return w.WriteError(fmt.Sprintf(
 			"ERR command %q is not supported by singleowner", c.Name()))
 	case RouteRead:
+		t0 := time.Now()
 		reply, err := d.do(ctx, c)
+		d.Metrics.RecordDispatch("read", time.Since(t0))
 		return writeReply(w, reply, err)
 	case RouteWrite:
+		t0 := time.Now()
 		if !d.IsPrimary {
 			return d.forwardWrite(ctx, c, w)
 		}
 		d.writeMu.Lock()
 		reply, derr := d.dispatchWrite(ctx, c)
 		d.writeMu.Unlock()
+		d.Metrics.RecordDispatch("write", time.Since(t0))
 		return writeReply(w, reply, derr)
 	}
 	return w.WriteError("ERR internal: unknown route")
@@ -376,6 +419,29 @@ func (d *Dispatcher) forwardWrite(ctx context.Context, c *resp.Command, w *resp.
 	return writeReply(w, reply, err)
 }
 
+// Apply replays one WAL entry onto the local backend, optionally relayed.
+// A relay-only node (no backend) just writes to its own WAL.
+func (d *Dispatcher) Apply(ctx context.Context, e *pb.WalEntry) error {
+	if d.Relay {
+		if _, err := d.WAL.Append(e); err != nil {
+			return err
+		}
+	}
+	if d.Backend == nil {
+		return nil
+	}
+	return d.exec(ctx, e.Args)
+}
+
+func (d *Dispatcher) exec(ctx context.Context, args [][]byte) error {
+	a := make([]any, len(args))
+	for i := range args {
+		a[i] = args[i]
+	}
+	_, err := d.Backend.Do(ctx, a...)
+	return err
+}
+
 func (d *Dispatcher) do(ctx context.Context, c *resp.Command) (any, error) {
 	if d.Backend == nil {
 		return nil, fmt.Errorf("ERR this node has no backend configured")
@@ -384,7 +450,10 @@ func (d *Dispatcher) do(ctx context.Context, c *resp.Command) (any, error) {
 	for i := range c.Args {
 		args[i] = c.Args[i]
 	}
-	return d.Backend.Do(ctx, args...)
+	t0 := time.Now()
+	reply, err := d.Backend.Do(ctx, args...)
+	d.Metrics.RecordBackend(time.Since(t0), err != nil)
+	return reply, err
 }
 
 func writeReply(w *resp.Writer, v any, err error) error {

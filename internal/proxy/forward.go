@@ -4,7 +4,9 @@ import (
 	"context"
 	"errors"
 	"sync"
+	"time"
 
+	"github.com/meridianplane/meridian-redis-bridge/internal/metrics"
 	"github.com/meridianplane/meridian-redis-bridge/internal/resp"
 	pb "github.com/meridianplane/meridian-redis-bridge/proto"
 	"google.golang.org/grpc"
@@ -14,14 +16,15 @@ import (
 // GRPCForwarder relays writes upstream over gRPC, the same channel used
 // for WAL replication.
 type GRPCForwarder struct {
-	addr string
-	mu   sync.Mutex
-	conn *grpc.ClientConn
-	cli  pb.ReplicationClient
+	addr    string
+	metrics *metrics.Metrics
+	mu      sync.Mutex
+	conn    *grpc.ClientConn
+	cli     pb.ReplicationClient
 }
 
-func NewGRPCForwarder(addr string) *GRPCForwarder {
-	return &GRPCForwarder{addr: addr}
+func NewGRPCForwarder(addr string, m *metrics.Metrics) *GRPCForwarder {
+	return &GRPCForwarder{addr: addr, metrics: m}
 }
 
 func (g *GRPCForwarder) client() (pb.ReplicationClient, error) {
@@ -40,20 +43,25 @@ func (g *GRPCForwarder) client() (pb.ReplicationClient, error) {
 }
 
 func (g *GRPCForwarder) Forward(ctx context.Context, c *resp.Command) (any, error) {
+	t0 := time.Now()
 	cli, err := g.client()
 	if err != nil {
+		g.metrics.RecordForward(time.Since(t0), true)
 		return nil, err
 	}
 	reply, err := cli.Forward(ctx, &pb.ForwardRequest{Args: c.Args})
 	if err != nil {
+		g.metrics.RecordForward(time.Since(t0), true)
 		return nil, err
 	}
 	if reply.IsNil {
 		return nil, redisNil{}
 	}
 	if reply.Value != "" && reply.Value[0] == '-' {
+		g.metrics.RecordForward(time.Since(t0), true)
 		return nil, errors.New(reply.Value[1:])
 	}
+	g.metrics.RecordForward(time.Since(t0), false)
 	return reply.Value, nil
 }
 

@@ -12,6 +12,11 @@ import (
 )
 
 type Config struct {
+	// Cluster and Name identify this instance in metrics (e.g. cluster="prod-us",
+	// name="primary-east"). Exposed as const labels on all Prometheus metrics.
+	Cluster string `json:"cluster,omitempty"`
+	Name    string `json:"name,omitempty"`
+
 	// Upstream lists the gRPC addresses of parent nodes in the tree. Empty
 	// means this node is the root (primary). A follower forwards writes to
 	// and subscribes to the WAL of a randomly chosen parent.

@@ -4,5 +4,7 @@
   "backend": {
     "addr": "redis-primary:6379"
   },
-  "data_dir": "/var/lib/meridian"
+  "data_dir": "/var/lib/meridian",
+  "name": "primary",
+  "cluster": "demo"
 }

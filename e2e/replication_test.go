@@ -58,7 +58,7 @@ func newCluster(t *testing.T, followerForward bool) *cluster {
 	// Primary dispatcher (no forwarding — it is the owner).
 	pd := proxy.NewDispatcher(pbe, proxy.NewRouter(), pwal, true, nil, false, false)
 
-	pb.RegisterReplicationServer(gsrv, rsync.NewServer(pwal, pd, 0))
+	pb.RegisterReplicationServer(gsrv, rsync.NewServer(pwal, pd, 0, nil))
 	go func() { _ = gsrv.Serve(grpcLn) }()
 
 	// Primary RESP frontend.
@@ -81,7 +81,7 @@ func newCluster(t *testing.T, followerForward bool) *cluster {
 	}
 
 	// Follower forwarder to primary over gRPC.
-	fwd := proxy.NewGRPCForwarder(grpcLn.Addr().String())
+	fwd := proxy.NewGRPCForwarder(grpcLn.Addr().String(), nil)
 
 	// Follower dispatcher.
 	fd := proxy.NewDispatcher(fbe, proxy.NewRouter(), fwal, false, fwd, followerForward, false)
@@ -354,7 +354,7 @@ func TestGRPCReplicationStream(t *testing.T) {
 		t.Fatalf("listen: %v", err)
 	}
 	gs := grpc.NewServer()
-	pb.RegisterReplicationServer(gs, rsync.NewServer(w, nil, 0))
+	pb.RegisterReplicationServer(gs, rsync.NewServer(w, nil, 0, nil))
 	go func() { _ = gs.Serve(ln) }()
 	defer gs.Stop()
 
@@ -427,7 +427,7 @@ func TestRelay_PassThrough(t *testing.T) {
 	grpcLn, _ := net.Listen("tcp", "127.0.0.1:0")
 	pd := proxy.NewDispatcher(pbe, proxy.NewRouter(), pwal, true, nil, false, false)
 	gsrv := grpc.NewServer()
-	pb.RegisterReplicationServer(gsrv, rsync.NewServer(pwal, pd, 0))
+	pb.RegisterReplicationServer(gsrv, rsync.NewServer(pwal, pd, 0, nil))
 	go gsrv.Serve(grpcLn)
 	defer gsrv.Stop()
 
@@ -435,10 +435,10 @@ func TestRelay_PassThrough(t *testing.T) {
 	rwal, _ := wal.Open(wal.Options{Dir: t.TempDir()})
 	defer rwal.Close()
 	rpd := proxy.NewDispatcher(nil, proxy.NewRouter(), rwal, false,
-		proxy.NewGRPCForwarder(grpcLn.Addr().String()), true, true)
+		proxy.NewGRPCForwarder(grpcLn.Addr().String(), nil), true, true)
 	relayLn, _ := net.Listen("tcp", "127.0.0.1:0")
 	rgsrv := grpc.NewServer()
-	pb.RegisterReplicationServer(rgsrv, rsync.NewServer(rwal, rpd, 0))
+	pb.RegisterReplicationServer(rgsrv, rsync.NewServer(rwal, rpd, 0, nil))
 	go rgsrv.Serve(relayLn)
 	defer rgsrv.Stop()
 
@@ -486,14 +486,14 @@ func TestLB_Passthrough(t *testing.T) {
 	grpcLn, _ := net.Listen("tcp", "127.0.0.1:0")
 	pd := proxy.NewDispatcher(pbe, proxy.NewRouter(), pwal, true, nil, false, false)
 	gsrv := grpc.NewServer()
-	pb.RegisterReplicationServer(gsrv, rsync.NewServer(pwal, pd, 0))
+	pb.RegisterReplicationServer(gsrv, rsync.NewServer(pwal, pd, 0, nil))
 	go gsrv.Serve(grpcLn)
 	defer gsrv.Stop()
 
 	// LB — pure proxy, no WAL, no backend.
 	lbLn, _ := net.Listen("tcp", "127.0.0.1:0")
 	lbsrv := grpc.NewServer()
-	lbSync := rsync.NewServer(nil, nil, 0)
+	lbSync := rsync.NewServer(nil, nil, 0, nil)
 	lbSync.SetUpstream([]string{grpcLn.Addr().String()})
 	pb.RegisterReplicationServer(lbsrv, lbSync)
 	go lbsrv.Serve(lbLn)

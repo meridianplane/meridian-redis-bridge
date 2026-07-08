@@ -6,6 +6,7 @@ import (
 	"fmt"
 	"io"
 	"sync"
+	"time"
 
 	"github.com/redis/go-redis/v9"
 	"google.golang.org/grpc"
@@ -33,13 +34,14 @@ type Server struct {
 	writer   WriteHandler
 	maxBatch int
 
-	upstreamAddrs []string // for relay: proxy full sync to upstream
+	upstreamAddrs []string
+	metrics       *metrics.Metrics
 
 	mu         sync.Mutex
 	watermarks map[string]uint64
 }
 
-func NewServer(w *wal.WAL, writer WriteHandler, maxBatch int) *Server {
+func NewServer(w *wal.WAL, writer WriteHandler, maxBatch int, m *metrics.Metrics) *Server {
 	if maxBatch <= 0 {
 		maxBatch = defaultMaxBatch
 	}
@@ -47,6 +49,7 @@ func NewServer(w *wal.WAL, writer WriteHandler, maxBatch int) *Server {
 		wal:        w,
 		writer:     writer,
 		maxBatch:   maxBatch,
+		metrics:    m,
 		watermarks: map[string]uint64{},
 	}
 }
@@ -59,12 +62,15 @@ func (s *Server) Ack(_ context.Context, req *pb.AckRequest) (*pb.AckReply, error
 		s.watermarks[req.FollowerId] = req.AppliedSeq
 	}
 	s.mu.Unlock()
+	lag := s.wal.NextSeq() - req.AppliedSeq
+	s.metrics.RecordAck(lag)
+	s.metrics.RecordAckTime(req.FollowerId)
 	return &pb.AckReply{}, nil
 }
 
 func (s *Server) Subscribe(req *pb.SubscribeRequest, stream pb.Replication_SubscribeServer) error {
-	metrics.ConnectedFollowers.Add(1)
-	defer metrics.ConnectedFollowers.Add(-1)
+	s.metrics.RecordSubscribeStart()
+	defer s.metrics.RecordSubscribeEnd()
 
 	from := req.GetFromSeq()
 	ctx := stream.Context()
@@ -110,9 +116,12 @@ func (s *Server) Subscribe(req *pb.SubscribeRequest, stream pb.Replication_Subsc
 }
 
 func (s *Server) fullSync(stream pb.Replication_SubscribeServer, ctx context.Context) error {
+	s.metrics.RecordFullSyncStart()
+	t0 := time.Now()
+	defer func() { s.metrics.RecordFullSyncEnd(time.Since(t0)) }()
+
 	snapper, ok := s.writer.(StreamSnapshotter)
 	if !ok {
-		// Relay mode: proxy full sync to upstream.
 		return s.proxyFullSync(stream, ctx)
 	}
 	barrier := s.wal.StartSnapshot()
@@ -161,6 +170,7 @@ func (s *Server) proxyFullSync(stream pb.Replication_SubscribeServer, ctx contex
 }
 
 func (s *Server) Forward(ctx context.Context, req *pb.ForwardRequest) (*pb.ForwardReply, error) {
+	s.metrics.RecordStreamForward()
 	reply, derr := s.writer.DispatchWrite(ctx, req.Args)
 	if derr != nil {
 		if errors.Is(derr, redis.Nil) {
