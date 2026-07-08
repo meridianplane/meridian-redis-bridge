@@ -279,14 +279,6 @@ func (w *WAL) AbortSnapshot() {
 // WriteSnapshot writes the snapshot to disk from pre-built entries and
 // clears old segments before the snapshot barrier. Returns the snapshot
 // seq (max seq covered).
-func bargs(ss ...string) [][]byte {
-	out := make([][]byte, len(ss))
-	for i, s := range ss {
-		out[i] = []byte(s)
-	}
-	return out
-}
-
 func writeRecord(f *os.File, e *pb.WalEntry) error {
 	body, err := proto.Marshal(e)
 	if err != nil {

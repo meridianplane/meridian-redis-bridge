@@ -186,7 +186,7 @@ func TestSnapshot_Barrier(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	w.Append(&pb.WalEntry{Args: bargs("SET", "x", "old")})
+	w.Append(&pb.WalEntry{Args: [][]byte{[]byte("SET"), []byte("x"), []byte("old")}})
 	if w.NextSeq() != 2 {
 		t.Fatalf("NextSeq = %d, want 2", w.NextSeq())
 	}
@@ -197,21 +197,7 @@ func TestSnapshot_Barrier(t *testing.T) {
 	w.AbortSnapshot()
 }
 
-func strings2(ss [][]byte) []string {
-	out := make([]string, len(ss))
-	for i, s := range ss {
-		out[i] = string(s)
-	}
-	return out
-}
 
-func bargs(ss ...string) [][]byte {
-	out := make([][]byte, len(ss))
-	for i, s := range ss {
-		out[i] = []byte(s)
-	}
-	return out
-}
 
 func seqs(es []*pb.WalEntry) []uint64 {
 	out := make([]uint64, len(es))
