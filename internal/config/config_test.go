@@ -81,6 +81,31 @@ func TestLoad_ValidationErrors(t *testing.T) {
 	}
 }
 
+func TestLoad_IsLB(t *testing.T) {
+	load := func(body string) *config.Config {
+		c, err := config.Load(writeConfig(t, body))
+		if err != nil {
+			t.Fatalf("Load: %v", err)
+		}
+		return c
+	}
+	if !load(`{"upstream":["h:1"],"grpc_listen":":2"}`).IsLB() {
+		t.Fatal("upstream+no backend+no relay should be LB")
+	}
+	if load(`{"listen":":1","upstream":["h:1"],"grpc_listen":":2","backend":{"addr":"x"},"data_dir":"d"}`).IsLB() {
+		t.Fatal("backend.addr should not be LB")
+	}
+	if load(`{"listen":":1","upstream":["h:1"],"grpc_listen":":2","backend":{"addrs":["a","b"]},"data_dir":"d"}`).IsLB() {
+		t.Fatal("backend.addrs (cluster) should not be LB")
+	}
+	if load(`{"listen":":1","upstream":["h:1"],"grpc_listen":":2","relay":true,"data_dir":"d"}`).IsLB() {
+		t.Fatal("relay should not be LB")
+	}
+	if load(`{"listen":":1","grpc_listen":":2","backend":{"addr":"x"},"data_dir":"d"}`).IsLB() {
+		t.Fatal("primary should not be LB")
+	}
+}
+
 func TestLoad_ProxyAuth(t *testing.T) {
 	body := `{"listen":":1","grpc_listen":":2","backend":{"addr":"a"},"data_dir":"d","auth":{"passwd_file":"pw"}}`
 	c, err := config.Load(writeConfig(t, body))

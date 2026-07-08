@@ -79,18 +79,17 @@ func (c *Config) validate() error {
 			return fmt.Errorf("upstream contains empty address")
 		}
 	}
-	if c.Listen == "" {
-		return fmt.Errorf("listen is required")
-	}
 	if c.GRPCListen == "" {
 		return fmt.Errorf("grpc_listen is required")
 	}
 	if c.IsLB() {
-		// LB mode: upstream required, no data_dir needed.
 		if len(c.Upstream) == 0 {
 			return fmt.Errorf("lb mode requires upstream addresses")
 		}
 		return nil
+	}
+	if c.Listen == "" {
+		return fmt.Errorf("listen is required")
 	}
 	if c.DataDir == "" {
 		return fmt.Errorf("data_dir is required")

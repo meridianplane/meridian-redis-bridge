@@ -1,9 +1,13 @@
 package proxy
 
 import (
+	"context"
 	"strconv"
 	"strings"
 	"testing"
+
+	"github.com/alicebob/miniredis/v2"
+	"github.com/redis/go-redis/v9"
 )
 
 func TestNormalizeExpiry_SET_EX(t *testing.T) {
@@ -118,3 +122,42 @@ func TestNormalizeExpiry_default(t *testing.T) {
 	}
 }
 
+func TestBackend_ShardsStandalone(t *testing.T) {
+	b := NewBackend(BackendConfig{Addr: "127.0.0.1:6379"})
+	defer b.Close()
+	if s := b.shards(); s != nil {
+		t.Fatalf("standalone backend should return nil shards, got %d", len(s))
+	}
+}
+
+func TestStreamSnapshot_ShardFallback(t *testing.T) {
+	ctx := context.Background()
+	mr := miniredis.RunT(t)
+	b := NewBackend(BackendConfig{Addr: mr.Addr()})
+	defer b.Close()
+	b.Do(ctx, "SET", "k1", "v1")
+	b.Do(ctx, "HSET", "h1", "f1", "v1")
+
+	d := &Dispatcher{Backend: b}
+	var cmds [][][]byte
+	err := d.StreamSnapshot(ctx, 0, func(c [][][]byte) error {
+		cmds = append(cmds, c...)
+		return nil
+	})
+	if err != nil {
+		t.Fatalf("StreamSnapshot: %v", err)
+	}
+	if len(cmds) == 0 {
+		t.Fatal("expected commands from snapshot")
+	}
+	cli := redis.NewClient(&redis.Options{Addr: mr.Addr()})
+	defer cli.Close()
+	for _, cmd := range cmds {
+		args := make([]any, len(cmd))
+		for i, a := range cmd { args[i] = string(a) }
+		cli.Do(ctx, args...)
+	}
+	if v, _ := cli.Get(ctx, "k1").Result(); v != "v1" {
+		t.Fatalf("k1 = %q, want v1", v)
+	}
+}
