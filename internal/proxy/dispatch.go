@@ -207,7 +207,7 @@ func (d *Dispatcher) StreamSnapshot(ctx context.Context, barrier uint64, fn func
 			}
 			for _, k := range keys {
 				key := fmt.Sprint(k)
-				cmds := scanKey(ctx, d.Backend, key)
+				cmds := scanKey(ctx, shard, key)
 				batch = append(batch, cmds...)
 				if len(batch) >= batchSize {
 					if err := fn(batch); err != nil {

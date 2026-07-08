@@ -107,7 +107,7 @@ func (c *Config) UpstreamAddrs() []string { return c.Upstream }
 // IsLB detects load-balancer mode: upstream configured without relay or
 // backend, meaning this node is a pure proxy.
 func (c *Config) IsLB() bool {
-	return !c.IsPrimary() && !c.Relay && c.Backend.Addr == ""
+	return !c.IsPrimary() && !c.Relay && c.Backend.Addr == "" && len(c.Backend.Addrs) == 0
 }
 
 // AuthEnabled reports whether client authentication is configured.
