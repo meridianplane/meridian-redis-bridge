@@ -1,8 +1,8 @@
 # meridian-redis-bridge
 
-单主写入、多点读取的 Redis 跨区域同步代理。一个节点持有写权，写操作通过
-WAL 复制到所有 follower。Follower 接受本地读、写请求转发给上游。支持
-树形拓扑、relay、LB 三种角色。
+单主写入、多点读取的 Redis 跨区域同步代理。Primary 持有写权，写操作通过
+WAL 复制到 Follower，Follower 接受本地读。Relay 纯过路缓存 WAL，
+LB 透明代理。各节点以 upstream 指针形成树形拓扑。
 
 ## 快速开始
 
