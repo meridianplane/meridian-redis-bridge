@@ -31,10 +31,11 @@ import (
 // ── Backend ──
 
 type BackendConfig struct {
-	Addrs      []string
-	Addr       string
-	MasterName string
-	Password   string
+	Addr       string   // single node
+	Addrs      []string // cluster seed nodes
+	MasterName string   // sentinel master
+	Username   string   // Redis 6+ ACL username
+	Password   string   // requirepass or ACL password
 	DB         int
 	PoolSize   int
 }
@@ -48,7 +49,7 @@ func NewBackend(c BackendConfig) *Backend {
 	addrs := c.Addrs
 	if len(addrs) == 0 && c.Addr != "" { addrs = []string{c.Addr} }
 	cli := redis.NewUniversalClient(&redis.UniversalOptions{
-		Addrs: addrs, MasterName: c.MasterName, Password: c.Password, DB: c.DB, PoolSize: c.PoolSize,
+		Addrs: addrs, MasterName: c.MasterName, Username: c.Username, Password: c.Password, DB: c.DB, PoolSize: c.PoolSize,
 	})
 	return &Backend{cli: cli}
 }
@@ -59,6 +60,25 @@ func (b *Backend) Do(ctx context.Context, args ...any) (any, error) {
 	return b.cli.Do(ctx, args...).Result()
 }
 func IsNil(err error) bool { return errors.Is(err, redis.Nil) }
+
+// shards returns each master shard for cluster backends, or nil for standalone.
+func (b *Backend) shards() []*Backend {
+	if b == nil {
+		return nil
+	}
+	type shardWalker interface {
+		ForEachMaster(ctx context.Context, fn func(context.Context, *redis.Client) error) error
+	}
+	if sw, ok := b.cli.(shardWalker); ok {
+		var out []*Backend
+		_ = sw.ForEachMaster(context.Background(), func(ctx context.Context, cli *redis.Client) error {
+			out = append(out, &Backend{cli: cli})
+			return nil
+		})
+		return out
+	}
+	return nil
+}
 
 // ── Forwarder ──
 
@@ -163,34 +183,42 @@ func (d *Dispatcher) Dispatch(ctx context.Context, c *resp.Command, w *resp.Writ
 func (d *Dispatcher) StreamSnapshot(ctx context.Context, barrier uint64, fn func([][][]byte) error) error {
 	const batchSize = 500
 	batch := make([][][]byte, 0, batchSize)
-	cursor := uint64(0)
-	for {
-		v, err := d.Backend.Do(ctx, "SCAN", fmt.Sprint(cursor), "COUNT", "1000")
-		if err != nil {
-			return err
-		}
-		arr, ok := v.([]any)
-		if !ok || len(arr) != 2 {
-			return fmt.Errorf("bad SCAN reply")
-		}
-		cursor, _ = strconv.ParseUint(fmt.Sprint(arr[0]), 10, 64)
-		keys, ok := arr[1].([]any)
-		if !ok {
-			return fmt.Errorf("bad SCAN keys")
-		}
-		for _, k := range keys {
-			key := fmt.Sprint(k)
-			cmds := scanKey(ctx, d.Backend, key)
-			batch = append(batch, cmds...)
-			if len(batch) >= batchSize {
-				if err := fn(batch); err != nil {
-					return err
-				}
-				batch = batch[:0]
+
+	// Discover shards: for cluster backends, iterate each master.
+	shards := d.Backend.shards()
+	if len(shards) == 0 {
+		shards = append(shards, d.Backend)
+	}
+	for _, shard := range shards {
+		cursor := uint64(0)
+		for {
+			v, err := shard.Do(ctx, "SCAN", fmt.Sprint(cursor), "COUNT", "1000")
+			if err != nil {
+				return err
 			}
-		}
-		if cursor == 0 {
-			break
+			arr, ok := v.([]any)
+			if !ok || len(arr) != 2 {
+				return fmt.Errorf("bad SCAN reply")
+			}
+			cursor, _ = strconv.ParseUint(fmt.Sprint(arr[0]), 10, 64)
+			keys, ok := arr[1].([]any)
+			if !ok {
+				return fmt.Errorf("bad SCAN keys")
+			}
+			for _, k := range keys {
+				key := fmt.Sprint(k)
+				cmds := scanKey(ctx, d.Backend, key)
+				batch = append(batch, cmds...)
+				if len(batch) >= batchSize {
+					if err := fn(batch); err != nil {
+						return err
+					}
+					batch = batch[:0]
+				}
+			}
+			if cursor == 0 {
+				break
+			}
 		}
 	}
 	if len(batch) > 0 {

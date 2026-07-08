@@ -99,9 +99,11 @@ func run(cfg *config.Config, log *slog.Logger) error {
 
 	// Local backend — optional (relay-only nodes skip it).
 	var be *proxy.Backend
-	if cfg.Backend.Addr != "" {
+	if cfg.Backend.Addr != "" || len(cfg.Backend.Addrs) > 0 {
 		be = proxy.NewBackend(proxy.BackendConfig{
 			Addr:     cfg.Backend.Addr,
+			Addrs:    cfg.Backend.Addrs,
+			Username: cfg.Backend.Username,
 			Password: cfg.Backend.Password,
 			DB:       cfg.Backend.DB,
 			PoolSize: cfg.Backend.PoolSize,

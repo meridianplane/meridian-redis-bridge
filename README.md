@@ -31,10 +31,13 @@ redis-cli -p 6382 GET hello   # → "world"
 
 ```json
 {
+  "cluster": "prod-us",
+  "name": "primary-east",
   "upstream": ["10.0.0.1:7070", "10.0.0.2:7070"],
-  "relay": true,
+  "relay": false,
   "listen": ":6380",
   "grpc_listen": ":7070",
+  "metrics_listen": ":8080",
   "forward_writes": true,
   "backend": {"addr": "127.0.0.1:6379"},
   "data_dir": "/var/lib/meridian"
@@ -43,14 +46,16 @@ redis-cli -p 6382 GET hello   # → "world"
 
 | 字段 | 说明 |
 |------|------|
+| `cluster` | 集群名（监控用 label） |
+| `name` | 节点名（监控用 label） |
 | `upstream` | 上游 gRPC 地址列表，follower 随机选一连接。空 = primary |
 | `relay` | 是否缓写 WAL 供下游订阅。默认 `false` |
 | `listen` | RESP 前端地址（LB 模式可省略） |
 | `grpc_listen` | gRPC 复制/转发地址 |
+| `metrics_listen` | Prometheus metrics + health/pprof HTTP 地址 |
 | `forward_writes` | follower 是否转发写。默认 `true` |
-| `backend` | 本地 Redis/Kvrocks 地址（LB/relay 可省略） |
+| `backend` | 本地 Redis/Kvrocks 地址（LB/relay 可省略）。Cluster 模式用 `addrs` 数组 |
 | `data_dir` | WAL 和 watermark 存储目录（LB 可省略） |
-| `metrics_listen` | HTTP metrics 地址（`:8080`），暴露 healthz/readyz/pprof/expvar |
 | `auth` | 客户端认证，`passwd_file` 为 htpasswd 格式 |
 
 ### 节点角色速查

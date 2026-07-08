@@ -42,10 +42,12 @@ func (c *Config) WALDir() string { return c.DataDir + "/wal" }
 func (c *Config) StateDir() string { return c.DataDir + "/state" }
 
 type BackendConfig struct {
-	Addr     string `json:"addr"`
+	Addr         string   `json:"addr,omitempty"`
+	Addrs        []string `json:"addrs,omitempty"`
+	Username string `json:"username,omitempty"`
 	Password string `json:"password,omitempty"`
 	DB       int    `json:"db,omitempty"`
-	PoolSize int    `json:"pool_size,omitempty"`
+	PoolSize     int      `json:"pool_size,omitempty"`
 }
 
 type AuthConfig struct {
@@ -57,8 +59,10 @@ func Load(path string) (*Config, error) {
 	if err != nil {
 		return nil, err
 	}
+	// ${ENV_VAR} substitution
+	raw := os.Expand(string(data), func(k string) string { return os.Getenv(k) })
 	var c Config
-	dec := json.NewDecoder(strings.NewReader(string(data)))
+	dec := json.NewDecoder(strings.NewReader(raw))
 	dec.DisallowUnknownFields()
 	if err := dec.Decode(&c); err != nil {
 		return nil, fmt.Errorf("config %s: %w", path, err)
@@ -91,7 +95,7 @@ func (c *Config) validate() error {
 	if c.DataDir == "" {
 		return fmt.Errorf("data_dir is required")
 	}
-	if c.IsPrimary() && c.Backend.Addr == "" {
+	if c.IsPrimary() && c.Backend.Addr == "" && len(c.Backend.Addrs) == 0 {
 		return fmt.Errorf("primary node must have a backend configured")
 	}
 	return nil
@@ -112,3 +116,4 @@ func (c *Config) AuthEnabled() bool { return c.Auth.PasswdFile != "" }
 func (c *Config) ForwardWritesEnabled() bool {
 	return c.ForwardWrites == nil || *c.ForwardWrites
 }
+
