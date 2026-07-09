@@ -132,8 +132,22 @@ func run(cfg *config.Config, log *slog.Logger) error {
 		defer fwd.(*proxy.GRPCForwarder).Close()
 	}
 
+	// Island forwarders: key prefix → gRPC forwarder to another primary.
+	routes := make([]proxy.RouteEntry, 0, len(cfg.Routes))
+	for _, r := range cfg.Routes {
+		addrs, ok := cfg.Primaries[r.Target]
+		if !ok || len(addrs) == 0 {
+			return fmt.Errorf("route %q references unknown primary %q", r.Prefix, r.Target)
+		}
+		routes = append(routes, proxy.RouteEntry{
+			Prefix: r.Prefix,
+			Fwd:    proxy.NewGRPCForwarder(addrs[0], m),
+		})
+	}
+
 	// Dispatcher.
 	d := proxy.NewDispatcher(be, proxy.NewRouter(), w, isPrimary, fwd, cfg.ForwardWritesEnabled(), cfg.Relay)
+	d.Routes = routes
 	d.Metrics = m
 	if cfg.AuthEnabled() {
 		a, err := auth.NewFromFile(cfg.Auth.PasswdFile)

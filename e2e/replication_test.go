@@ -4,6 +4,7 @@ import (
 	"context"
 	"fmt"
 	"net"
+	"os"
 	"sync"
 	"testing"
 	"time"
@@ -12,6 +13,7 @@ import (
 	
 	
 	"github.com/meridianplane/meridian-redis-bridge/internal/proxy"
+	"github.com/meridianplane/meridian-redis-bridge/internal/resp"
 	"github.com/meridianplane/meridian-redis-bridge/internal/server"
 	rsync "github.com/meridianplane/meridian-redis-bridge/internal/sync"
 	"github.com/meridianplane/meridian-redis-bridge/internal/wal"
@@ -520,4 +522,64 @@ func TestLB_Passthrough(t *testing.T) {
 		return v == "works"
 	})
 	_ = pbe.Close()
+}
+
+func TestRoutes_CrossPrefixForwarding(t *testing.T) {
+	ctx, cancel := context.WithCancel(context.Background())
+	defer cancel()
+
+	// Island US: primary-us.
+	usMR := miniredis.RunT(t)
+	usBe := proxy.NewBackend(proxy.BackendConfig{Addr: usMR.Addr()})
+	usWal, _ := wal.Open(wal.Options{Dir: t.TempDir()})
+	usLn, _ := net.Listen("tcp", "127.0.0.1:0")
+	usD := proxy.NewDispatcher(usBe, proxy.NewRouter(), usWal, true, nil, false, false)
+	usGsrv := grpc.NewServer()
+	pb.RegisterReplicationServer(usGsrv, rsync.NewServer(usWal, usD, 0, nil))
+	go usGsrv.Serve(usLn)
+	defer usGsrv.Stop()
+
+	// Island EU: primary-eu.
+	euMR := miniredis.RunT(t)
+	euBe := proxy.NewBackend(proxy.BackendConfig{Addr: euMR.Addr()})
+	euWal, _ := wal.Open(wal.Options{Dir: t.TempDir()})
+	euLn, _ := net.Listen("tcp", "127.0.0.1:0")
+	euD := proxy.NewDispatcher(euBe, proxy.NewRouter(), euWal, true, nil, false, false)
+	euGsrv := grpc.NewServer()
+	pb.RegisterReplicationServer(euGsrv, rsync.NewServer(euWal, euD, 0, nil))
+	go euGsrv.Serve(euLn)
+	defer euGsrv.Stop()
+
+	// Primary-US has routes: eu:* → forward to primary-eu.
+	usD.Routes = []proxy.RouteEntry{
+		{Prefix: "eu:", Fwd: proxy.NewGRPCForwarder(euLn.Addr().String(), nil)},
+	}
+	euD.Routes = []proxy.RouteEntry{
+		{Prefix: "us:", Fwd: proxy.NewGRPCForwarder(usLn.Addr().String(), nil)},
+	}
+
+	// Write via primary-US RESP path: local key stays, eu goes to EU.
+	dispatch := func(d *proxy.Dispatcher, args ...string) {
+		cmd := &resp.Command{Args: make([][]byte, len(args))}
+		for i, a := range args { cmd.Args[i] = []byte(a) }
+		w := resp.NewWriter(os.Stdout)
+		d.Dispatch(ctx, cmd, w, nil)
+	}
+	dispatch(usD, "SET", "us:nyc", "us-value")
+	dispatch(usD, "SET", "eu:ber", "eu-value")
+
+	// Verify routing.
+	if v, _ := usMR.Get("us:nyc"); v != "us-value" {
+		t.Fatalf("us:nyc should be on US island, got %q", v)
+	}
+	if exists := usMR.Exists("eu:ber"); exists {
+		t.Fatal("eu:ber should NOT be on US island")
+	}
+	if v, _ := euMR.Get("eu:ber"); v != "eu-value" {
+		t.Fatalf("eu:ber should be on EU island, got %q", v)
+	}
+	_ = usBe.Close()
+	_ = euBe.Close()
+	_ = usWal.Close()
+	_ = euWal.Close()
 }

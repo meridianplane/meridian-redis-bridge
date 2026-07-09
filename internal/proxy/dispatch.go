@@ -82,6 +82,13 @@ func (b *Backend) shards() []*Backend {
 
 // ── Forwarder ──
 
+// RouteEntry is one route rule with its resolved forwarder.
+// Longest-matching prefix wins (order-independent).
+type RouteEntry struct {
+	Prefix string
+	Fwd    Forwarder
+}
+
 // Forwarder relays a write to an upstream node and returns its reply verbatim.
 type Forwarder interface {
 	Forward(ctx context.Context, c *resp.Command) (any, error)
@@ -96,6 +103,7 @@ type Dispatcher struct {
 
 	IsPrimary     bool
 	Forward       Forwarder
+	Routes []RouteEntry // ordered prefix→forwarder, first-match-wins
 	ForwardWrites bool
 	Relay         bool // when true, Apply writes entries to local WAL for downstream followers
 	Auth          auth.Authenticator
@@ -166,6 +174,12 @@ func (d *Dispatcher) Dispatch(ctx context.Context, c *resp.Command, w *resp.Writ
 		t0 := time.Now()
 		if !d.IsPrimary {
 			return d.forwardWrite(ctx, c, w)
+		}
+		// Cross-shard routing: match key prefix against routes map.
+		if fwd, prefix := d.matchRoute(c.Args); fwd != nil {
+			reply, err := fwd.Forward(ctx, c)
+			d.Metrics.RecordDispatch("write."+prefix, time.Since(t0))
+			return writeReply(w, reply, err)
 		}
 		d.writeMu.Lock()
 		reply, derr := d.dispatchWrite(ctx, c)
@@ -433,6 +447,22 @@ func normalizeExpireCmd(args [][]byte, nowMs int64, isAt bool) [][][]byte {
 		pexArgs = append(pexArgs, args[i])
 	}
 	return [][][]byte{pexArgs}
+}
+
+// matchRoute returns the forwarder and prefix for a cross-shard write.
+// Longest matching prefix wins (e.g. "eu:de:" beats "eu:"). Returns
+// (nil, "") for local keyspace.
+func (d *Dispatcher) matchRoute(args [][]byte) (Forwarder, string) {
+	if len(args) < 2 { return nil, "" }
+	key := string(args[1])
+	var best Forwarder
+	var bestPrefix string
+	for _, r := range d.Routes {
+		if strings.HasPrefix(key, r.Prefix) && len(r.Prefix) > len(bestPrefix) {
+			best, bestPrefix = r.Fwd, r.Prefix
+		}
+	}
+	return best, bestPrefix
 }
 
 // forwardWrite relays a write upstream and renders the reply.

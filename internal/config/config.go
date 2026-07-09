@@ -1,7 +1,3 @@
-// Package config loads a node's runtime configuration. Each node is either
-// the root (primary) or a child with an upstream — a list of parent gRPC
-// addresses. There is no global inventory: the tree is implicit in the
-// upstream pointers.
 package config
 
 import (
@@ -11,57 +7,59 @@ import (
 	"strings"
 )
 
+// RouteRule is one key-prefix routing entry. First match wins.
+type RouteRule struct {
+	Prefix string `json:"prefix"`
+	Target string `json:"target"`
+}
+
+// Config is the full node configuration loaded from JSON.
 type Config struct {
-	// Cluster and Name identify this instance in metrics (e.g. cluster="prod-us",
-	// name="primary-east"). Exposed as const labels on all Prometheus metrics.
 	Cluster string `json:"cluster,omitempty"`
 	Name    string `json:"name,omitempty"`
 
-	// Upstream lists the gRPC addresses of parent nodes in the tree. Empty
-	// means this node is the root (primary). A follower forwards writes to
-	// and subscribes to the WAL of a randomly chosen parent.
 	Upstream []string `json:"upstream,omitempty"`
+	Relay    bool     `json:"relay,omitempty"`
 
-	// Relay enables replication relay: every entry received from upstream
-	// is written to the local WAL before being applied.
-	Relay bool `json:"relay,omitempty"`
+	// Routes maps key prefixes to primary targets for cross-shard write
+	// forwarding. Longest matching prefix wins (order-independent).
+	Routes []RouteRule `json:"routes,omitempty"`
 
-	Listen       string       `json:"listen"`
-	GRPCListen    string  `json:"grpc_listen"`
-	MetricsListen    string `json:"metrics_listen,omitempty"`
-	ForwardWrites    *bool  `json:"forward_writes,omitempty"`
-	WALFlush         string `json:"wal_flush,omitempty"`
-	WALFlushInterval int    `json:"wal_flush_interval,omitempty"`
-	Auth         AuthConfig   `json:"auth,omitempty"`
-	Backend BackendConfig `json:"backend"`
-	DataDir string        `json:"data_dir"`
+	// Primaries maps primary names to their gRPC endpoints.
+	Primaries map[string][]string `json:"primaries,omitempty"`
+
+	Listen        string `json:"listen"`
+	GRPCListen    string `json:"grpc_listen"`
+	MetricsListen string `json:"metrics_listen,omitempty"`
+	ForwardWrites *bool  `json:"forward_writes,omitempty"`
+	WALFlush      string `json:"wal_flush,omitempty"`
+	WALFlushInterval int `json:"wal_flush_interval,omitempty"`
+	Auth          AuthConfig   `json:"auth,omitempty"`
+	Backend       BackendConfig `json:"backend"`
+	DataDir       string `json:"data_dir"`
 }
 
-// WALDir returns the WAL directory under DataDir.
-func (c *Config) WALDir() string { return c.DataDir + "/wal" }
-
-// StateDir returns the state directory under DataDir.
-func (c *Config) StateDir() string { return c.DataDir + "/state" }
-
 type BackendConfig struct {
-	Addr         string   `json:"addr,omitempty"`
-	Addrs        []string `json:"addrs,omitempty"`
-	Username string `json:"username,omitempty"`
-	Password string `json:"password,omitempty"`
-	DB       int    `json:"db,omitempty"`
-	PoolSize     int      `json:"pool_size,omitempty"`
+	Addr     string   `json:"addr,omitempty"`
+	Addrs    []string `json:"addrs,omitempty"`
+	Username string   `json:"username,omitempty"`
+	Password string   `json:"password,omitempty"`
+	DB       int      `json:"db,omitempty"`
+	PoolSize int      `json:"pool_size,omitempty"`
 }
 
 type AuthConfig struct {
 	PasswdFile string `json:"passwd_file,omitempty"`
 }
 
+func (c *Config) WALDir() string  { return c.DataDir + "/wal" }
+func (c *Config) StateDir() string { return c.DataDir + "/state" }
+
 func Load(path string) (*Config, error) {
 	data, err := os.ReadFile(path)
 	if err != nil {
 		return nil, err
 	}
-	// ${ENV_VAR} substitution
 	raw := os.Expand(string(data), func(k string) string { return os.Getenv(k) })
 	var c Config
 	dec := json.NewDecoder(strings.NewReader(raw))
@@ -105,16 +103,12 @@ func (c *Config) validate() error {
 func (c *Config) IsPrimary() bool        { return len(c.Upstream) == 0 }
 func (c *Config) UpstreamAddrs() []string { return c.Upstream }
 
-// IsLB detects load-balancer mode: upstream configured without relay or
-// backend, meaning this node is a pure proxy.
 func (c *Config) IsLB() bool {
 	return !c.IsPrimary() && !c.Relay && c.Backend.Addr == "" && len(c.Backend.Addrs) == 0
 }
 
-// AuthEnabled reports whether client authentication is configured.
 func (c *Config) AuthEnabled() bool { return c.Auth.PasswdFile != "" }
 
 func (c *Config) ForwardWritesEnabled() bool {
 	return c.ForwardWrites == nil || *c.ForwardWrites
 }
-

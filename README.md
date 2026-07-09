@@ -56,7 +56,30 @@ redis-cli -p 6382 GET hello   # → "world"
 | `forward_writes` | follower 是否转发写。默认 `true` |
 | `backend` | 本地 Redis/Kvrocks 地址（LB/relay 可省略）。Cluster 模式用 `addrs` 数组 |
 | `data_dir` | WAL 和 watermark 存储目录（LB 可省略） |
+| `wal_flush` | WAL 刷盘模式：`none`（OS drain）、`periodic`（定时 fsync）、`sync`（每次 fsync） |
+| `wal_flush_interval` | periodic 模式下的 fsync 间隔（毫秒，默认 100） |
+| `routes` | 跨 shard 路由规则，key prefix → primary 名称，最长前缀匹配 |
+| `primaries` | primary 名称 → gRPC 地址列表 |
 | `auth` | 客户端认证，`passwd_file` 为 htpasswd 格式 |
+
+### 多 shard 路由
+
+Key prefix 匹配规则——最长前缀生效，eg `eu:de:` 优先于 `eu:`：
+
+```json
+{
+  "routes": [
+    {"prefix": "eu:de:", "target": "primary-de"},
+    {"prefix": "eu:",    "target": "primary-eu"}
+  ],
+  "primaries": {
+    "primary-eu": ["10.0.0.1:7070"],
+    "primary-de": ["10.0.0.2:7070"]
+  }
+}
+```
+
+Primary 之间通过写转发形成星形总线，非本 shard 的 key 自动转发到目标 primary。
 
 ### 节点角色速查
 
